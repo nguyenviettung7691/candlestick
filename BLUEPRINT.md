@@ -377,5 +377,11 @@ Recommended baseline profile for development:
 * `PollingScheduleState=DISABLED` when using local mock streams
 * Shorter log retention windows (for example `7`) to reduce costs
 
-**Source**  
-1\. [https://github.com/Algo360-by-Odav/Algo360FX](https://github.com/Algo360-by-Odav/Algo360FX)
+### **References**
+
+1. [TradingView Lightweight Charts](https://tradingview.github.io/lightweight-charts/) — HTML5 Canvas charting library used in `AnalysisChart.tsx`
+2. [TanStack Table v8](https://tanstack.com/table/v8) — Headless table engine used in `MetricsTable.tsx`
+3. [vnstock3](https://github.com/thinh-vu/vnstock) — Python library for Vietnamese stock market data used in `app.py`
+4. [Next.js App Router](https://nextjs.org/docs/app) — React framework powering the frontend
+5. [AWS SAM Developer Guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html) — SAM template and deployment toolchain
+6. [Amazon API Gateway WebSocket APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html) — WebSocket connection lifecycle and route management
