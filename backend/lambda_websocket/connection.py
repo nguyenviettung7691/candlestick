@@ -9,7 +9,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 
-DYNAMO_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "VnIndexDashboardTable")
+DYNAMO_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "CandlestickDashboardTable")
 WS_CONNECTION_TTL_SECONDS = int(os.environ.get("WS_CONNECTION_TTL_SECONDS", "3600"))
 WS_CONNECTION_PREFIX = "WS_CONNECTION#"
 DASHBOARD_PREFIX = "DASHBOARD#"

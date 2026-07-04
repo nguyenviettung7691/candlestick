@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'VNINDEX Indicator Dashboard',
-  description: 'Hydrate-then-Stream dashboard for VNINDEX indicator tracking.',
+  title: 'Candlestick Dashboard',
+  description: 'Hydrate-then-Stream dashboard for market indicator tracking.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

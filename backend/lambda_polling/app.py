@@ -33,7 +33,7 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     return max(parsed, minimum)
 
 
-DYNAMO_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "VnIndexDashboardTable")
+DYNAMO_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "CandlestickDashboardTable")
 WEBSOCKET_ENDPOINT = os.environ.get("WEBSOCKET_API_ENDPOINT", "")
 POLL_INTERVAL_SECONDS = _env_int("POLL_INTERVAL_SECONDS", 10)
 MAX_RUNTIME_SECONDS = _env_int("MAX_RUNTIME_SECONDS", 52)
@@ -52,6 +52,10 @@ class StreamTarget:
     dashboard_id: str
     pk: str
     sk: str
+
+
+def _normalize_symbol(value: Any) -> str:
+    return str(value).strip().upper()
 
 
 def _safe_series_payload(payload: dict[str, Any]) -> bytes:
@@ -117,7 +121,9 @@ def get_active_targets(
         if not ticker_code and symbol_sk.startswith("SYMBOL#"):
             ticker_code = symbol_sk.split("#", 1)[1]
         if ticker_code:
-            dashboard_symbols[dashboard_id].add(str(ticker_code))
+            normalized_ticker = _normalize_symbol(ticker_code)
+            if normalized_ticker:
+                dashboard_symbols[dashboard_id].add(normalized_ticker)
 
     connection_items = _scan_all_items(
         dynamo_table,

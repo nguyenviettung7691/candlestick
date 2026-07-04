@@ -122,7 +122,7 @@ export default function Page() {
     });
 
     if (!liveRows.some((row) => row.symbol === selectedSymbol)) {
-      setSelectedSymbol(liveRows[0]?.symbol ?? 'VNINDEX');
+      setSelectedSymbol(liveRows[0]?.symbol ?? 'FPT');
     }
   }, [lastPacket, liveRows, selectedSymbol]);
 
@@ -151,7 +151,7 @@ export default function Page() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Hydrate-then-Stream</p>
-              <h1 className="mt-2 text-3xl font-semibold text-slate-50 sm:text-4xl">VNINDEX Indicator Tracking Dashboard</h1>
+              <h1 className="mt-2 text-3xl font-semibold text-slate-50 sm:text-4xl">Candlestick Indicator Dashboard</h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
                 A serverless analytics surface for market structure, liquidity shock detection, mean reversion, and trend regime monitoring.
               </p>

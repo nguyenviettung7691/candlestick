@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: VNINDEX Indicator Tracking Dashboard backend.
+Description: Candlestick indicator dashboard backend.
 
 Globals:
   Function:
@@ -23,7 +23,7 @@ Globals:
 Parameters:
   DashboardTableName:
     Type: String
-    Default: VnIndexDashboardTable
+    Default: CandlestickDashboardTable
     Description: DynamoDB single-table name for dashboards, symbols, and websocket connections.
   StageName:
     Type: String
@@ -154,7 +154,7 @@ Parameters:
     Description: Enable AWS X-Ray tracing for Lambda functions.
   WebSocketApiName:
     Type: String
-    Default: VnIndexDashboardWebSocket
+    Default: CandlestickWebSocket
     Description: Name of the API Gateway WebSocket API.
 
 Conditions:

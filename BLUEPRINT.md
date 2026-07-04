@@ -1,6 +1,6 @@
 ## **Project Overview & Objectives**
 
-Build a fully serverless, scale-to-zero Web Application for a Vietnam Stock Market (VNINDEX) Indicator Tracking Dashboard. The architecture utilizes a "Hydrate-then-Stream" pattern via AWS Lambda execution loops, eliminating the need for an always-on server or load balancer.
+Build a fully serverless, scale-to-zero web application for the Candlestick indicator tracking dashboard. The architecture utilizes a "Hydrate-then-Stream" pattern via AWS Lambda execution loops, eliminating the need for an always-on server or load balancer.
 
 ### **Tech Stack Specifications**
 
@@ -39,7 +39,7 @@ Plaintext
 
 ## **2\. Database Schema (DynamoDB Single-Table Specification)**
 
-Create a single table named VnIndexDashboardTable with a Partition Key (PK, String) and Sort Key (SK, String). Enable Time to Live (TTL) on the attribute ttl for ephemeral items such as websocket connections.
+Create a single table named CandlestickDashboardTable with a Partition Key (PK, String) and Sort Key (SK, String). Enable Time to Live (TTL) on the attribute ttl for ephemeral items such as websocket connections.
 
 Connection TTL values should be computed at write time as `connected_at_epoch + WS_CONNECTION_TTL_SECONDS`; do not hard-code a single absolute epoch for all connections.
 
@@ -183,7 +183,7 @@ from vnstock3 import Vnstock
 from indicators import calculate\_mtf\_scoring, calculate\_ls\_dvp, calculate\_mr\_zsb, calculate\_atrm
 
 dynamodb \= boto3.resource('dynamodb')  
-table \= dynamodb.Table('VnIndexDashboardTable')
+table \= dynamodb.Table('CandlestickDashboardTable')
 
 \# Setup API Gateway Management API Client  
 apigw\_client \= boto3.client(  
