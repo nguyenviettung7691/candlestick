@@ -9,6 +9,8 @@ const intervalMs = Number.parseInt(process.env.MOCK_WS_INTERVAL_MS ?? "2000", 10
 const symbolProfiles = {
   FPT: {
     symbol: "FPT",
+    provider_symbol: "FPT.VN",
+    company_name: "FPT Corporation",
     price: 128.25,
     mtf_score: 77.2,
     mtf_signal: "BUY",
@@ -21,6 +23,8 @@ const symbolProfiles = {
   },
   HPG: {
     symbol: "HPG",
+    provider_symbol: "HPG.VN",
+    company_name: "Hoa Phat Group",
     price: 26.75,
     mtf_score: 58.4,
     mtf_signal: "NEUTRAL",
@@ -33,6 +37,8 @@ const symbolProfiles = {
   },
   VCB: {
     symbol: "VCB",
+    provider_symbol: "VCB.VN",
+    company_name: "Joint Stock Commercial Bank for Foreign Trade of Vietnam",
     price: 91.8,
     mtf_score: 82.1,
     mtf_signal: "BUY",
@@ -99,11 +105,24 @@ const httpServer = createServer((req, res) => {
       service: "local-mock-websocket-stream",
       websocket: `ws://${host}:${port}`,
       usage: "Connect with ?dashboardId=dash_01",
+      dataMode: "synthetic",
     })
   );
 });
 
 const wss = new WebSocketServer({ server: httpServer });
+
+wss.on("error", (error) => {
+  if (error?.code !== "EADDRINUSE") {
+    console.error("[mock-ws] websocket server error:", error);
+    process.exit(1);
+  }
+
+  console.warn(`[mock-ws] port ${port} is already in use; reusing existing stream server if available.`);
+  setInterval(() => {
+    // Keep process alive so concurrently does not kill Next.js.
+  }, 60_000);
+});
 
 wss.on("connection", (socket, request) => {
   const reqUrl = new URL(request.url ?? "/", `ws://${request.headers.host ?? "localhost"}`);
@@ -119,8 +138,9 @@ wss.on("connection", (socket, request) => {
 
   clientState.set(socket, { timer, dashboardId, connectionId });
 
+  const packet = buildPacket(dashboardId, connectionId);
   if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify(buildPacket(dashboardId, connectionId)));
+    socket.send(JSON.stringify(packet));
   }
 
   socket.on("close", () => {
@@ -135,5 +155,6 @@ wss.on("connection", (socket, request) => {
 httpServer.listen(port, host, () => {
   console.log(`[mock-ws] running on ws://${host}:${port}`);
   console.log(`[mock-ws] interval ${Math.max(500, intervalMs)}ms`);
+  console.log("[mock-ws] mode synthetic");
   console.log("[mock-ws] dashboards: dash_01, banking, steel");
 });

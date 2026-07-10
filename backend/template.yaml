@@ -19,6 +19,9 @@ Globals:
         MAX_RUNTIME_SECONDS: !Ref MaxRuntimeSeconds
         PRICE_HISTORY_SIZE: !Ref PriceHistorySize
         STOCK_DATA_SOURCE: !Ref StockDataSource
+        VAPID_PUBLIC_KEY: !Ref VapidPublicKey
+        VAPID_PRIVATE_KEY: !Ref VapidPrivateKey
+        VAPID_SUBJECT: !Ref VapidSubject
 
 Parameters:
   DashboardTableName:
@@ -70,6 +73,19 @@ Parameters:
     Type: String
     Default: VCI
     Description: vnstock source identifier.
+  VapidPublicKey:
+    Type: String
+    Default: ''
+    Description: Public VAPID key for browser push delivery.
+  VapidPrivateKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Private VAPID key for browser push delivery.
+  VapidSubject:
+    Type: String
+    Default: 'mailto:admin@example.com'
+    Description: Contact subject claim used when signing VAPID requests.
   FunctionTimeoutSeconds:
     Type: Number
     Default: 60

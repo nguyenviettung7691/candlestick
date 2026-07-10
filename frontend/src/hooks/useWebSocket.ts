@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { DashboardTickerSnapshot, StreamPacket } from '@/lib/types';
+import type { DashboardTickerSnapshot, NotificationEvent, StreamHistoryBar, StreamPacket } from '@/lib/types';
 
 interface UseWebSocketOptions {
   url: string;
@@ -29,6 +29,7 @@ function isDashboardTickerSnapshot(value: unknown): value is DashboardTickerSnap
   const row = value as Record<string, unknown>;
   return (
     typeof row.symbol === 'string' &&
+    (row.company_name === undefined || typeof row.company_name === 'string') &&
     typeof row.price === 'number' &&
     typeof row.mtf_score === 'number' &&
     typeof row.mtf_signal === 'string' &&
@@ -38,6 +39,41 @@ function isDashboardTickerSnapshot(value: unknown): value is DashboardTickerSnap
     typeof row.z_signal === 'string' &&
     typeof row.trend_delta === 'number' &&
     typeof row.trend_signal === 'string'
+  );
+}
+
+function isNotificationEvent(value: unknown): value is NotificationEvent {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const event = value as Record<string, unknown>;
+  return (
+    typeof event.id === 'string' &&
+    typeof event.ruleId === 'string' &&
+    typeof event.dashboardId === 'string' &&
+    typeof event.symbol === 'string' &&
+    typeof event.message === 'string' &&
+    typeof event.triggeredAtEpoch === 'number' &&
+    event.channels !== null &&
+    typeof event.channels === 'object' &&
+    typeof (event.channels as Record<string, unknown>).inApp === 'boolean' &&
+    typeof (event.channels as Record<string, unknown>).push === 'boolean'
+  );
+}
+
+function isStreamHistoryBar(value: unknown): value is StreamHistoryBar {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const bar = value as Record<string, unknown>;
+  return (
+    typeof bar.time === 'number' &&
+    typeof bar.open === 'number' &&
+    typeof bar.high === 'number' &&
+    typeof bar.low === 'number' &&
+    typeof bar.close === 'number'
   );
 }
 
@@ -55,7 +91,34 @@ function isStreamPacket(value: unknown): value is StreamPacket {
   }
 
   const rows = packet.data as Record<string, unknown>;
-  return Object.values(rows).every(isDashboardTickerSnapshot);
+  if (!Object.values(rows).every(isDashboardTickerSnapshot)) {
+    return false;
+  }
+
+  if (packet.history !== undefined) {
+    if (!packet.history || typeof packet.history !== 'object') {
+      return false;
+    }
+
+    const historyBySymbol = packet.history as Record<string, unknown>;
+    if (
+      !Object.values(historyBySymbol).every(
+        (series) => Array.isArray(series) && series.every(isStreamHistoryBar),
+      )
+    ) {
+      return false;
+    }
+  }
+
+  if (packet.notifications === undefined) {
+    return true;
+  }
+
+  if (!Array.isArray(packet.notifications)) {
+    return false;
+  }
+
+  return packet.notifications.every(isNotificationEvent);
 }
 
 export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
@@ -65,6 +128,7 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
   const [error, setError] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<number | null>(null);
+  const connectTimerRef = useRef<number | null>(null);
   const attemptRef = useRef(0);
 
   useEffect(() => {
@@ -75,6 +139,13 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
       if (retryRef.current !== null) {
         window.clearTimeout(retryRef.current);
         retryRef.current = null;
+      }
+    };
+
+    const clearConnectTimer = () => {
+      if (connectTimerRef.current !== null) {
+        window.clearTimeout(connectTimerRef.current);
+        connectTimerRef.current = null;
       }
     };
 
@@ -156,12 +227,18 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
       };
     };
 
-    connect();
+    // Defer the initial connect to avoid creating a transient socket during
+    // React Strict Mode's dev-only mount/unmount cycle.
+    connectTimerRef.current = window.setTimeout(() => {
+      connectTimerRef.current = null;
+      connect();
+    }, 0);
 
     return () => {
       mounted = false;
       shouldReconnect = false;
       clearRetry();
+      clearConnectTimer();
       socketRef.current?.close();
       socketRef.current = null;
     };

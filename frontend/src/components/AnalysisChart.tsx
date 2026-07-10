@@ -1,17 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from 'react';
-import { createChart, type IChartApi, type ISeriesApi, type SeriesMarker } from 'lightweight-charts';
+import { createChart, type IChartApi, type ISeriesApi, type SeriesMarker, type Time } from 'lightweight-charts';
 
-import type { CandleBar, IndicatorMarker } from '@/lib/types';
+import type { CandleBar, IndicatorMarker, TimerangeOption } from '@/lib/types';
 
 interface ChartProps {
   symbol: string;
+  companyName: string;
+  timerange: TimerangeOption;
+  onChangeTimerange: (timerange: TimerangeOption) => void;
   historicalData: CandleBar[];
   indicatorMarkers: IndicatorMarker[];
 }
 
-export default function AnalysisChart({ symbol, historicalData, indicatorMarkers }: ChartProps) {
+const TIMERANGE_OPTIONS: TimerangeOption[] = ['1D', '1W', '1M', '3M'];
+
+export default function AnalysisChart({
+  symbol,
+  companyName,
+  timerange,
+  onChangeTimerange,
+  historicalData,
+  indicatorMarkers,
+}: ChartProps) {
+  const hasSelectedSymbol = symbol.trim().length > 0;
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -33,7 +46,7 @@ export default function AnalysisChart({ symbol, historicalData, indicatorMarkers
     return deduped;
   }, [historicalData]);
 
-  const normalizedMarkers = useMemo<SeriesMarker<string>[]>(() => {
+  const normalizedMarkers = useMemo<SeriesMarker<Time>[]>(() => {
     const availableTimes = new Set(normalizedHistory.map((bar) => String(bar.time)));
     return indicatorMarkers
       .filter((marker) => availableTimes.has(String(marker.time)))
@@ -48,6 +61,11 @@ export default function AnalysisChart({ symbol, historicalData, indicatorMarkers
   const sessionDeltaPct =
     sessionDelta !== undefined && previousClose && previousClose !== 0 ? (sessionDelta / previousClose) * 100 : undefined;
   const sessionDirection = sessionDelta === undefined ? 'flat' : sessionDelta > 0 ? 'up' : sessionDelta < 0 ? 'down' : 'flat';
+  const lastCloseLabel = latestClose === undefined ? 'Pending' : latestClose.toFixed(2);
+  const deltaClass =
+    sessionDirection === 'up' ? 'text-emerald-400' : sessionDirection === 'down' ? 'text-rose-400' : 'text-slate-300';
+  const deltaPctClass =
+    sessionDirection === 'up' ? 'text-emerald-300/85' : sessionDirection === 'down' ? 'text-rose-300/85' : 'text-slate-400';
 
   useEffect(() => {
     if (!chartContainerRef.current) {
@@ -126,36 +144,64 @@ export default function AnalysisChart({ symbol, historicalData, indicatorMarkers
     }
   }, [normalizedHistory, normalizedMarkers, symbol]);
 
+  useEffect(() => {
+    if (!chartRef.current || normalizedHistory.length === 0) {
+      return;
+    }
+
+    chartRef.current.timeScale().fitContent();
+  }, [timerange, normalizedHistory.length]);
+
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[color:var(--panel)] shadow-glow">
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+    <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[color:var(--panel)]/95 shadow-glow">
+      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2.5 sm:py-3">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.25em] text-slate-400">Live Structure</h2>
-          <p className="mt-1 text-lg font-semibold text-slate-100">{symbol}</p>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Live Chart</h2>
+          <p className="mt-1 flex min-w-0 items-center gap-x-2 leading-tight">
+            <span className="shrink-0 text-2xl font-extrabold tracking-[0.05em] text-slate-100">
+              {hasSelectedSymbol ? symbol : 'No symbol selected'}
+            </span>
+            <span className="max-w-[180px] truncate text-xs font-medium uppercase tracking-[0.16em] text-slate-500 sm:max-w-[280px]">
+              {hasSelectedSymbol ? companyName : 'Select a watchlist row to load chart'}
+            </span>
+          </p>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs tracking-[0.04em]">
+            <span className={["text-sm font-semibold sm:text-base", deltaClass].join(' ')}>
+              {sessionDelta === undefined ? 'No session delta' : `${sessionDelta >= 0 ? '+' : ''}${sessionDelta.toFixed(2)}`}
+            </span>
+            <span className={["font-medium", deltaPctClass].join(' ')}>
+              {sessionDeltaPct === undefined ? 'Awaiting 2 bars' : `${sessionDeltaPct >= 0 ? '+' : ''}${sessionDeltaPct.toFixed(2)}%`}
+            </span>
+            <span className="text-slate-500">Last close: {lastCloseLabel}</span>
+          </p>
         </div>
-        <div className="text-right">
-          <div
-            className={[
-              'text-sm font-semibold',
-              sessionDirection === 'up'
-                ? 'text-emerald-400'
-                : sessionDirection === 'down'
-                  ? 'text-rose-400'
-                  : 'text-slate-300',
-            ].join(' ')}
-          >
-            {sessionDelta === undefined ? 'No session delta' : `${sessionDelta >= 0 ? '+' : ''}${sessionDelta.toFixed(2)}`}
-          </div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            {sessionDeltaPct === undefined ? 'Lightweight Charts' : `${sessionDeltaPct >= 0 ? '+' : ''}${sessionDeltaPct.toFixed(2)}%`}
+        <div className="flex items-center gap-3">
+          <div className="min-w-[176px] rounded-full border border-slate-700 bg-slate-950/45 p-1">
+            {TIMERANGE_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                disabled={!hasSelectedSymbol}
+                onClick={() => onChangeTimerange(option)}
+                className={[
+                  'rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors',
+                  option === timerange ? 'bg-cyan-400/20 text-cyan-200' : 'text-slate-400 hover:text-slate-200',
+                  !hasSelectedSymbol ? 'cursor-not-allowed opacity-45 hover:text-slate-400' : '',
+                ].join(' ')}
+              >
+                {option}
+              </button>
+            ))}
           </div>
         </div>
       </div>
       <div className="relative">
         <div ref={chartContainerRef} className="h-[360px] w-full sm:h-[420px]" />
-        {normalizedHistory.length === 0 ? (
+        {!hasSelectedSymbol || normalizedHistory.length === 0 ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/35 backdrop-blur-[1px]">
-            <p className="text-sm text-slate-400">Waiting for chart history...</p>
+            <p className="text-sm text-slate-400">
+              {hasSelectedSymbol ? 'Waiting for chart history...' : 'Select a symbol from the watchlist to view chart'}
+            </p>
           </div>
         ) : null}
       </div>

@@ -5,12 +5,16 @@
   "scripts": {
     "dev": "next dev",
     "mock:ws": "node ./scripts/mock-websocket-stream.mjs",
+    "mock:ws:real": "python ../backend/lambda_polling/local_ws_stream.py",
     "dev:local": "concurrently -k -n MOCK,NEXT \"npm:mock:ws\" \"npm:dev\"",
+    "dev:local:real": "concurrently -k -n REAL,NEXT \"npm:mock:ws:real\" \"cross-env NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8788 npm run dev\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.894.0",
+    "@aws-sdk/lib-dynamodb": "^3.894.0",
     "@tanstack/react-table": "^8.20.5",
     "lightweight-charts": "^4.2.0",
     "next": "14.2.5",
@@ -24,6 +28,7 @@
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.5",
     "postcss": "^8.4.49",
