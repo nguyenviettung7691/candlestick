@@ -1,6 +1,5 @@
-boto3
 numpy
 pandas
-pywebpush>=1.14,<2
 vnstock>=4.0.4; python_version < "3.14"
 vnstock>=4.0.2,<4.0.4; python_version >= "3.14"
+websockets>=12,<14

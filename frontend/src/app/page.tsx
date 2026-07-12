@@ -6,7 +6,9 @@ import type { UTCTimestamp } from 'lightweight-charts';
 import AnalysisChart from '@/components/AnalysisChart';
 import { MetricsTable } from '@/components/MetricsTable';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { useNotificationEvaluator } from '@/hooks/useNotificationEvaluator';
 import { getSymbolCatalog, saveSymbolCatalog } from '@/lib/local-db';
+import * as persistence from '@/lib/client/persistence';
 import type {
   CandleBar,
   DashboardDefinition,
@@ -20,12 +22,6 @@ import type {
   SymbolCatalogItem,
   TimerangeOption,
 } from '@/lib/types';
-
-const SYMBOL_COMPANY_NAMES: Record<string, string> = {
-  FPT: 'FPT Corporation',
-  HPG: 'Hoa Phat Group',
-  VCB: 'Joint Stock Commercial Bank for Foreign Trade of Vietnam',
-};
 
 const BUILT_IN_INDICATORS: IndicatorDefinition[] = [
   {
@@ -58,78 +54,6 @@ const BUILT_IN_INDICATORS: IndicatorDefinition[] = [
   },
 ];
 
-const INITIAL_DASHBOARDS: DashboardDefinition[] = [
-  {
-    id: 'dash_01',
-    name: 'Core Dashboard',
-    description: 'General market lens across key symbols.',
-    indicatorId: 'MTF_SCORING',
-    symbols: ['FPT', 'HPG', 'VCB'],
-  },
-  {
-    id: 'banking',
-    name: 'Banking Focus',
-    description: 'Focused on banking and high-liquidity names.',
-    indicatorId: 'LS_DVP',
-    symbols: ['VCB', 'FPT'],
-  },
-  {
-    id: 'steel',
-    name: 'Steel Watch',
-    description: 'Trend and mean-reversion watch for steel sector.',
-    indicatorId: 'ATRM',
-    symbols: ['HPG'],
-  },
-];
-
-const SAMPLE_ROWS: DashboardTickerSnapshot[] = [
-  {
-    symbol: 'FPT',
-    company_name: SYMBOL_COMPANY_NAMES.FPT,
-    price: 163.24,
-    mtf_score: 65.2,
-    mtf_signal: 'NEUTRAL',
-    ls_ratio: 4,
-    ls_signal: 'SHOCK_DISTRIBUTION',
-    z_score: -1.56,
-    z_signal: 'NEUTRAL',
-    trend_delta: -3.96,
-    trend_signal: 'NEUTRAL',
-  },
-  {
-    symbol: 'HPG',
-    company_name: SYMBOL_COMPANY_NAMES.HPG,
-    price: 25.79,
-    mtf_score: 55.9,
-    mtf_signal: 'NEUTRAL',
-    ls_ratio: 4,
-    ls_signal: 'SHOCK_DISTRIBUTION',
-    z_score: -0.9,
-    z_signal: 'NEUTRAL',
-    trend_delta: -15.08,
-    trend_signal: 'BEARISH_TREND',
-  },
-  {
-    symbol: 'VCB',
-    company_name: SYMBOL_COMPANY_NAMES.VCB,
-    price: 162.88,
-    mtf_score: 91.7,
-    mtf_signal: 'BUY',
-    ls_ratio: 4,
-    ls_signal: 'SHOCK_DISTRIBUTION',
-    z_score: 4.25,
-    z_signal: 'SELL_OVERBOUGHT',
-    trend_delta: 39.53,
-    trend_signal: 'BULLISH_TREND',
-  },
-];
-
-const DEFAULT_SYMBOL_CATALOG: SymbolCatalogItem[] = [
-  { symbol: 'FPT', companyName: SYMBOL_COMPANY_NAMES.FPT, exchange: 'HOSE' },
-  { symbol: 'HPG', companyName: SYMBOL_COMPANY_NAMES.HPG, exchange: 'HOSE' },
-  { symbol: 'VCB', companyName: SYMBOL_COMPANY_NAMES.VCB, exchange: 'HOSE' },
-];
-
 const MAX_BARS_PER_SYMBOL = 180;
 const TIMERANGE_TO_BARS: Record<TimerangeOption, number> = {
   '1D': 24,
@@ -137,7 +61,6 @@ const TIMERANGE_TO_BARS: Record<TimerangeOption, number> = {
   '1M': 120,
   '3M': 180,
 };
-const ENABLE_LOCAL_FALLBACK = process.env.NEXT_PUBLIC_ENABLE_LOCAL_FALLBACK === 'true';
 
 interface DashboardFormState {
   name: string;
@@ -277,10 +200,6 @@ function normalizeSymbolList(symbols: string[]): string[] {
 function mergeSymbolCatalog(baseCatalog: SymbolCatalogItem[], dashboards: DashboardDefinition[]): SymbolCatalogItem[] {
   const merged = new Map<string, SymbolCatalogItem>();
 
-  for (const item of DEFAULT_SYMBOL_CATALOG) {
-    merged.set(item.symbol, item);
-  }
-
   for (const item of baseCatalog) {
     const symbol = String(item.symbol).trim().toUpperCase();
     if (!symbol) {
@@ -289,13 +208,14 @@ function mergeSymbolCatalog(baseCatalog: SymbolCatalogItem[], dashboards: Dashbo
 
     merged.set(symbol, {
       symbol,
-      companyName: item.companyName?.trim() || SYMBOL_COMPANY_NAMES[symbol] || symbol,
+      companyName: item.companyName?.trim() || symbol,
       exchange: item.exchange,
     });
   }
 
   for (const dashboard of dashboards) {
-    for (const symbol of dashboard.symbols) {
+    const dashboardSymbols = Array.isArray(dashboard.symbols) ? dashboard.symbols : [];
+    for (const symbol of dashboardSymbols) {
       const normalized = String(symbol).trim().toUpperCase();
       if (!normalized || merged.has(normalized)) {
         continue;
@@ -303,7 +223,7 @@ function mergeSymbolCatalog(baseCatalog: SymbolCatalogItem[], dashboards: Dashbo
 
       merged.set(normalized, {
         symbol: normalized,
-        companyName: SYMBOL_COMPANY_NAMES[normalized] || normalized,
+        companyName: normalized,
       });
     }
   }
@@ -342,7 +262,7 @@ function toNotificationFormState(rule: NotificationRule | null, dashboards: Dash
     const dashboardId = dashboard?.id ?? rule.dashboardId;
     const dashboardSymbols = normalizeSymbolList(dashboard?.symbols ?? []);
     const normalizedRuleSymbol = rule.symbol.trim().toUpperCase();
-    const fallbackSymbol = dashboardSymbols[0] ?? (normalizedRuleSymbol || 'FPT');
+    const fallbackSymbol = dashboardSymbols[0] ?? normalizedRuleSymbol;
     const symbol = dashboardSymbols.includes(normalizedRuleSymbol)
       ? normalizedRuleSymbol
       : fallbackSymbol;
@@ -366,7 +286,7 @@ function toNotificationFormState(rule: NotificationRule | null, dashboards: Dash
   return {
     name: '',
     dashboardId: dashboard?.id ?? '',
-    symbol: dashboardSymbols[0] ?? 'FPT',
+    symbol: dashboardSymbols[0] ?? '',
     indicatorId: dashboard?.indicatorId ?? BUILT_IN_INDICATORS[0].id,
     cooldownSeconds: '300',
     enabled: true,
@@ -449,12 +369,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export default function Page() {
-  const [dashboards, setDashboards] = useState<DashboardDefinition[]>(ENABLE_LOCAL_FALLBACK ? INITIAL_DASHBOARDS : []);
+  const [dashboards, setDashboards] = useState<DashboardDefinition[]>([]);
   const [indicators, setIndicators] = useState<IndicatorDefinition[]>(BUILT_IN_INDICATORS);
 
-  const [selectedDashboardId, setSelectedDashboardId] = useState<string>(
-    ENABLE_LOCAL_FALLBACK ? INITIAL_DASHBOARDS[0].id : '',
-  );
+  const [selectedDashboardId, setSelectedDashboardId] = useState<string>('');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
   const [timerange, setTimerange] = useState<TimerangeOption>('1W');
   const [configError, setConfigError] = useState<string | null>(null);
@@ -466,12 +384,11 @@ export default function Page() {
     name: '',
     description: '',
     indicatorId: BUILT_IN_INDICATORS[0].id,
-    symbols: ['FPT', 'HPG', 'VCB'],
+    symbols: [],
   });
-  const [symbolCatalog, setSymbolCatalog] = useState<SymbolCatalogItem[]>(DEFAULT_SYMBOL_CATALOG);
+  const [symbolCatalog, setSymbolCatalog] = useState<SymbolCatalogItem[]>([]);
   const [symbolCatalogError, setSymbolCatalogError] = useState<string | null>(null);
   const [symbolCatalogLoading, setSymbolCatalogLoading] = useState(false);
-  const [isBackgroundFetching, setIsBackgroundFetching] = useState(false);
   const [symbolSearch, setSymbolSearch] = useState('');
 
   const [isIndicatorModalOpen, setIsIndicatorModalOpen] = useState(false);
@@ -482,20 +399,20 @@ export default function Page() {
   const [notificationRules, setNotificationRules] = useState<NotificationRule[]>([]);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [notificationForm, setNotificationForm] = useState<NotificationFormState>(
-    toNotificationFormState(null, ENABLE_LOCAL_FALLBACK ? INITIAL_DASHBOARDS : []),
+    toNotificationFormState(null, []),
   );
   const [notificationError, setNotificationError] = useState<string | null>(null);
   const [liveNotificationEvents, setLiveNotificationEvents] = useState<NotificationEvent[]>([]);
 
-  const dashboardId = selectedDashboardId || 'default';
+  const dashboardId = selectedDashboardId;
+  const activeDashboard = dashboards.find((dashboard) => dashboard.id === selectedDashboardId) ?? dashboards[0];
   const { connected, connectionState, lastPacket, error } = useWebSocket({
-    url: process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? 'ws://localhost:8787',
+    url: process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? 'ws://localhost:8788',
     dashboardId,
+    symbols: activeDashboard?.symbols ?? [],
   });
 
   const [historyBySymbol, setHistoryBySymbol] = useState<Record<string, CandleBar[]>>({});
-
-  const activeDashboard = dashboards.find((dashboard) => dashboard.id === selectedDashboardId) ?? dashboards[0];
   const activeIndicator = indicators.find((indicator) => indicator.id === activeDashboard?.indicatorId) ?? indicators[0];
   const effectiveSymbolCatalog = useMemo(() => mergeSymbolCatalog(symbolCatalog, dashboards), [dashboards, symbolCatalog]);
   const filteredSymbolCatalog = useMemo(() => {
@@ -517,15 +434,18 @@ export default function Page() {
 
     return dashboardSymbols.map((symbol) => ({
       symbol,
-      companyName: symbolMeta.get(symbol)?.companyName ?? SYMBOL_COMPANY_NAMES[symbol] ?? symbol,
+      companyName: symbolMeta.get(symbol)?.companyName ?? symbol,
     }));
   }, [dashboards, effectiveSymbolCatalog, notificationForm.dashboardId]);
 
-  const refreshSymbolCatalog = useCallback(async (isBackground = false): Promise<SymbolCatalogResponse | null> => {
-    if (!isBackground) {
+  const refreshSymbolCatalog = useCallback(async (): Promise<SymbolCatalogResponse | null> => {
+    // Only surface the loading overlay when there is no existing catalog in
+    // local storage. The vnstock API fetch still runs in the background to keep
+    // the catalog fresh even when cached data is already present.
+    const initialCatalog = getSymbolCatalog();
+    const hasInitialCache = !!(initialCatalog && initialCatalog.length > 0);
+    if (!hasInitialCache) {
       setSymbolCatalogLoading(true);
-    } else {
-      setIsBackgroundFetching(true);
     }
 
     try {
@@ -536,7 +456,9 @@ export default function Page() {
         saveSymbolCatalog(items);
       }
 
-      if (response.source === 'fallback') {
+      const cachedCatalog = getSymbolCatalog();
+      const hasCachedData = !!(cachedCatalog && cachedCatalog.length > 0);
+      if (response.source === 'fallback' && !hasCachedData) {
         setSymbolCatalogError('Showing fallback symbols. Loading full VNStock catalog may take a moment.');
       } else {
         setSymbolCatalogError(null);
@@ -544,50 +466,45 @@ export default function Page() {
 
       return response;
     } catch {
-      setSymbolCatalogError('Live symbol catalog is unavailable. Using fallback symbols.');
+      const cachedCatalog = getSymbolCatalog();
+      const hasCachedData = !!(cachedCatalog && cachedCatalog.length > 0);
+      if (!hasCachedData) {
+        setSymbolCatalogError('Live symbol catalog is unavailable. Using fallback symbols.');
+      } else {
+        setSymbolCatalogError(null);
+      }
       return null;
     } finally {
       setSymbolCatalogLoading(false);
-      setIsBackgroundFetching(false);
     }
   }, []);
 
   const hydrateConfiguration = useCallback(async () => {
     setConfigError(null);
     try {
-      await requestJson<{ ok: true; user_id: string }>('/api/session', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-
       const cachedCatalog = getSymbolCatalog();
       const hasCache = !!(cachedCatalog && cachedCatalog.length > 0);
       if (hasCache) {
         setSymbolCatalog(cachedCatalog!);
       }
 
-      const symbolResponsePromise = hasCache 
-        ? refreshSymbolCatalog(true) 
-        : refreshSymbolCatalog(false);
+      const symbolResponsePromise = refreshSymbolCatalog();
 
-      const [dashboardResponse, indicatorResponse, notificationResponse, symbolResponse] = await Promise.all([
-        requestJson<ApiListResponse<DashboardDefinition>>('/api/dashboards'),
-        requestJson<ApiListResponse<IndicatorDefinition>>('/api/indicators'),
-        requestJson<ApiListResponse<NotificationRule>>('/api/notifications'),
+      const [apiDashboards, customIndicators, notificationItems, symbolResponse] = await Promise.all([
+        persistence.listDashboards(),
+        persistence.listCustomIndicators(),
+        persistence.listNotificationRules(),
         symbolResponsePromise,
       ]);
 
-      const apiDashboards = dashboardResponse.items ?? [];
-      const customIndicators = indicatorResponse.items ?? [];
-      const notificationItems = notificationResponse.items ?? [];
       const mergedIndicators = [...BUILT_IN_INDICATORS, ...customIndicators];
 
       setIndicators(mergedIndicators);
-      setDashboards(apiDashboards.length > 0 ? apiDashboards : ENABLE_LOCAL_FALLBACK ? INITIAL_DASHBOARDS : []);
+      setDashboards(apiDashboards.length > 0 ? apiDashboards : []);
       setNotificationRules(notificationItems);
-      
+
       if (!hasCache && (!symbolResponse?.items?.length)) {
-        setSymbolCatalog(DEFAULT_SYMBOL_CATALOG);
+        setSymbolCatalog([]);
       }
 
       setSelectedDashboardId((prev) => {
@@ -597,17 +514,11 @@ export default function Page() {
         if (apiDashboards.length > 0) {
           return apiDashboards[0].id;
         }
-        if (ENABLE_LOCAL_FALLBACK) {
-          return INITIAL_DASHBOARDS[0].id;
-        }
         return '';
       });
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : 'Failed to load dashboard configuration.');
-      if (ENABLE_LOCAL_FALLBACK) {
-        setDashboards(INITIAL_DASHBOARDS);
-      }
-      setSymbolCatalog(DEFAULT_SYMBOL_CATALOG);
+      setSymbolCatalog([]);
       setIndicators(BUILT_IN_INDICATORS);
       setNotificationRules([]);
     }
@@ -617,15 +528,51 @@ export default function Page() {
     void hydrateConfiguration();
   }, [hydrateConfiguration]);
 
-  const liveRows = useMemo(() => Object.values(lastPacket?.data ?? {}), [lastPacket]);
-  const livePacketNotifications = useMemo(() => lastPacket?.notifications ?? [], [lastPacket]);
-  const rows = useMemo(() => {
-    const sourceRows = liveRows.length > 0 ? liveRows : ENABLE_LOCAL_FALLBACK ? SAMPLE_ROWS : [];
-    return sourceRows.map((row) => ({
-      ...row,
-      company_name: row.company_name ?? SYMBOL_COMPANY_NAMES[row.symbol] ?? row.symbol,
-    }));
-  }, [liveRows]);
+  // The dashboard `data` map is keyed by the canonical (uppercase) symbol, while the
+  // inner `row.symbol` value can differ in case from the data provider. Re-key each row
+  // on the map key so scoping, history, and selection stay case-consistent.
+  const liveRows = useMemo(
+    () =>
+      Object.entries(lastPacket?.data ?? {}).map(([symbol, row]) => ({
+        ...row,
+        symbol,
+        company_name: row.company_name ?? symbol,
+      })),
+    [lastPacket],
+  );
+  const rows = useMemo(() => liveRows, [liveRows]);
+
+  // Client-side notification evaluation: every WS packet is checked against the
+  // user's rules. Matching rules persist NotificationEvents to IndexedDB and are
+  // pushed into the in-app feed via `appendLiveNotificationEvents`.
+  const appendLiveNotificationEvents = useCallback(
+    (events: NotificationEvent[]) => {
+      setLiveNotificationEvents((prev) => {
+        const seen = new Set(prev.map((event) => event.id));
+        const nextBatch = events.filter((event) => event.dashboardId === dashboardId && !seen.has(event.id));
+        if (nextBatch.length === 0) {
+          return prev;
+        }
+        return [...nextBatch, ...prev].slice(0, 12);
+      });
+    },
+    [dashboardId],
+  );
+
+  const handleRuleTriggered = useCallback((ruleId: string, triggeredAtEpoch: number) => {
+    setNotificationRules((prev) =>
+      prev.map((rule) => (rule.id === ruleId ? { ...rule, lastTriggeredAtEpoch: triggeredAtEpoch } : rule)),
+    );
+    void persistence.updateNotificationRule(ruleId, { lastTriggeredAtEpoch: triggeredAtEpoch });
+  }, []);
+
+  useNotificationEvaluator({
+    rules: notificationRules,
+    packet: lastPacket,
+    dashboardId,
+    onEvents: appendLiveNotificationEvents,
+    onRuleTriggered: handleRuleTriggered,
+  });
 
   const availableSymbols = useMemo(() => {
     if (!activeDashboard) {
@@ -677,29 +624,19 @@ export default function Page() {
   }, [lastPacket, liveRows]);
 
   useEffect(() => {
-    if (!lastPacket || lastPacket.dashboard_id !== dashboardId || livePacketNotifications.length === 0) {
-      return;
-    }
-
-    setLiveNotificationEvents((prev) => {
-      const seen = new Set(prev.map((event) => event.id));
-      const nextBatch = livePacketNotifications.filter((event) => event.dashboardId === dashboardId && !seen.has(event.id));
-      if (nextBatch.length === 0) {
-        return prev;
-      }
-
-      const merged = [...nextBatch, ...prev];
-      return merged.slice(0, 12);
-    });
-  }, [dashboardId, lastPacket, livePacketNotifications]);
-
-  useEffect(() => {
     if (selectedSymbol && !availableSymbols.includes(selectedSymbol)) {
       setSelectedSymbol('');
     }
   }, [availableSymbols, selectedSymbol]);
 
   const selectedRow = selectedSymbol ? rows.find((row) => row.symbol === selectedSymbol) ?? null : null;
+  const selectedCompanyName = useMemo(() => {
+    if (!selectedSymbol) {
+      return '';
+    }
+    const catalogEntry = effectiveSymbolCatalog.find((item) => item.symbol === selectedSymbol);
+    return catalogEntry?.companyName || selectedRow?.company_name || selectedSymbol;
+  }, [selectedSymbol, selectedRow, effectiveSymbolCatalog]);
   const selectedHistory = useMemo(() => (selectedSymbol ? historyBySymbol[selectedSymbol] ?? [] : []), [historyBySymbol, selectedSymbol]);
   const filteredHistory = useMemo(() => {
     const maxBars = TIMERANGE_TO_BARS[timerange];
@@ -720,11 +657,13 @@ export default function Page() {
   }, [activeDashboard?.indicatorId, selectedRow, filteredHistory]);
 
   const watchlistRows = useMemo(() => {
-    const scopedRows = rows.filter((row) => (activeDashboard?.symbols ?? []).includes(row.symbol));
+    // Use the symbols from the editing form if a dashboard is being edited; otherwise, use the active dashboard's symbols.
+    const effectiveSymbols = isEditingDashboard && activeDashboard ? dashboardForm.symbols : (activeDashboard?.symbols ?? []);
+    const scopedRows = rows.filter((row) => effectiveSymbols.includes(row.symbol));
     return scopedRows.map((row) =>
       toWatchlistRow(row, activeDashboard?.indicatorId, historyBySymbol[row.symbol] ?? [], lastPacket?.as_of_epoch),
     );
-  }, [activeDashboard?.indicatorId, activeDashboard?.symbols, historyBySymbol, lastPacket?.as_of_epoch, rows]);
+  }, [isEditingDashboard, dashboardForm.symbols, activeDashboard?.indicatorId, activeDashboard?.symbols, historyBySymbol, lastPacket?.as_of_epoch, rows]);
 
   const streamLabel =
     connectionState === 'connected'
@@ -739,11 +678,16 @@ export default function Page() {
       name: '',
       description: '',
       indicatorId: indicators[0]?.id ?? BUILT_IN_INDICATORS[0].id,
-      symbols: ['FPT', 'HPG', 'VCB'],
+      symbols: [],
     });
     setSymbolSearch('');
-    if (symbolCatalog.length <= DEFAULT_SYMBOL_CATALOG.length) {
-      void refreshSymbolCatalog();
+    if (symbolCatalog.length === 0) {
+      const cached = getSymbolCatalog();
+      if (cached && cached.length > 0) {
+        setSymbolCatalog(cached);
+      } else {
+        void refreshSymbolCatalog();
+      }
     }
     setIsDashboardModalOpen(true);
   };
@@ -761,8 +705,13 @@ export default function Page() {
       symbols: normalizeSymbolList(activeDashboard.symbols),
     });
     setSymbolSearch('');
-    if (symbolCatalog.length <= DEFAULT_SYMBOL_CATALOG.length) {
-      void refreshSymbolCatalog();
+    if (symbolCatalog.length === 0) {
+      const cached = getSymbolCatalog();
+      if (cached && cached.length > 0) {
+        setSymbolCatalog(cached);
+      } else {
+        void refreshSymbolCatalog();
+      }
     }
     setIsDashboardModalOpen(true);
   };
@@ -787,38 +736,29 @@ export default function Page() {
     setConfigError(null);
     try {
       if (isEditingDashboard && activeDashboard) {
-        const response = await requestJson<ApiListResponse<DashboardDefinition>>(
-          `/api/dashboards/${activeDashboard.id}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({
-              name: dashboardForm.name.trim(),
-              description: dashboardForm.description.trim(),
-              indicatorId: dashboardForm.indicatorId,
-              symbols,
-            }),
-          },
-        );
+        const updated = await persistence.updateDashboard(activeDashboard.id, {
+          name: dashboardForm.name.trim(),
+          description: dashboardForm.description.trim(),
+          indicatorId: dashboardForm.indicatorId,
+          symbols,
+        });
 
-        if (response.item) {
+        if (updated) {
           setDashboards((prev) =>
-            prev.map((dashboard) => (dashboard.id === response.item?.id ? response.item : dashboard)),
+            prev.map((dashboard) => (dashboard.id === updated.id ? updated : dashboard)),
           );
         }
       } else {
-        const response = await requestJson<ApiListResponse<DashboardDefinition>>('/api/dashboards', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: dashboardForm.name.trim(),
-            description: dashboardForm.description.trim(),
-            indicatorId: dashboardForm.indicatorId,
-            symbols,
-          }),
+        const created = await persistence.createDashboard({
+          name: dashboardForm.name.trim(),
+          description: dashboardForm.description.trim(),
+          indicatorId: dashboardForm.indicatorId,
+          symbols,
         });
 
-        if (response.item) {
-          setDashboards((prev) => [...prev, response.item as DashboardDefinition]);
-          setSelectedDashboardId(response.item.id);
+        if (created) {
+          setDashboards((prev) => [...prev, created]);
+          setSelectedDashboardId(created.id);
         }
       }
 
@@ -866,38 +806,28 @@ export default function Page() {
     setConfigError(null);
     try {
       if (base.isBuiltIn) {
-        const response = await requestJson<ApiListResponse<IndicatorDefinition>>('/api/indicators', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: indicatorEditor.name.trim(),
-            description: indicatorEditor.description.trim(),
-            params: parsedParams,
-          }),
+        const created = await persistence.createIndicator({
+          name: indicatorEditor.name.trim(),
+          description: indicatorEditor.description.trim(),
+          params: parsedParams,
         });
 
-        if (response.item) {
-          const customIndicator = response.item;
-          setIndicators((prev) => [...prev, customIndicator]);
-          setActiveIndicatorEditorId(customIndicator.id);
-          setIndicatorEditor(toIndicatorEditorState(customIndicator));
+        if (created) {
+          setIndicators((prev) => [...prev, created]);
+          setActiveIndicatorEditorId(created.id);
+          setIndicatorEditor(toIndicatorEditorState(created));
         }
         return;
       }
 
-      const response = await requestJson<ApiListResponse<IndicatorDefinition>>(
-        `/api/indicators/${base.id}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            name: indicatorEditor.name.trim(),
-            description: indicatorEditor.description.trim(),
-            params: parsedParams,
-          }),
-        },
-      );
+      const updated = await persistence.updateIndicator(base.id, {
+        name: indicatorEditor.name.trim(),
+        description: indicatorEditor.description.trim(),
+        params: parsedParams,
+      });
 
-      if (response.item) {
-        setIndicators((prev) => prev.map((indicator) => (indicator.id === response.item?.id ? response.item : indicator)));
+      if (updated) {
+        setIndicators((prev) => prev.map((indicator) => (indicator.id === updated.id ? updated : indicator)));
       }
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : 'Failed to persist indicator changes.');
@@ -933,16 +863,13 @@ export default function Page() {
     setIsPersisting(true);
     setConfigError(null);
     try {
-      const response = await requestJson<ApiListResponse<DashboardDefinition>>(`/api/dashboards/${activeDashboard.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          indicatorId: activeIndicatorEditorId,
-        }),
+      const updated = await persistence.updateDashboard(activeDashboard.id, {
+        indicatorId: activeIndicatorEditorId,
       });
 
-      if (response.item) {
+      if (updated) {
         setDashboards((prev) =>
-          prev.map((dashboard) => (dashboard.id === response.item?.id ? response.item : dashboard)),
+          prev.map((dashboard) => (dashboard.id === updated.id ? updated : dashboard)),
         );
       }
     } catch (error) {
@@ -1005,48 +932,42 @@ export default function Page() {
     setConfigError(null);
     try {
       if (notificationForm.id) {
-        const response = await requestJson<ApiListResponse<NotificationRule>>(`/api/notifications/${notificationForm.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            name: notificationForm.name.trim(),
-            dashboardId: notificationForm.dashboardId,
-            symbol: notificationForm.symbol.trim().toUpperCase(),
-            indicatorId: notificationForm.indicatorId,
-            condition: parsedCondition,
-            channels: {
-              inApp: notificationForm.channelsInApp,
-              push: notificationForm.channelsPush,
-            },
-            cooldownSeconds: Math.floor(parsedCooldown),
-            enabled: notificationForm.enabled,
-          }),
+        const updated = await persistence.updateNotificationRule(notificationForm.id, {
+          name: notificationForm.name.trim(),
+          dashboardId: notificationForm.dashboardId,
+          symbol: notificationForm.symbol.trim().toUpperCase(),
+          indicatorId: notificationForm.indicatorId,
+          condition: parsedCondition,
+          channels: {
+            inApp: notificationForm.channelsInApp,
+            push: notificationForm.channelsPush,
+          },
+          cooldownSeconds: Math.floor(parsedCooldown),
+          enabled: notificationForm.enabled,
         });
 
-        if (response.item) {
-          setNotificationRules((prev) => prev.map((rule) => (rule.id === response.item?.id ? response.item : rule)));
-          setNotificationForm(toNotificationFormState(response.item, dashboards));
+        if (updated) {
+          setNotificationRules((prev) => prev.map((rule) => (rule.id === updated.id ? updated : rule)));
+          setNotificationForm(toNotificationFormState(updated, dashboards));
         }
       } else {
-        const response = await requestJson<ApiListResponse<NotificationRule>>('/api/notifications', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: notificationForm.name.trim(),
-            dashboardId: notificationForm.dashboardId,
-            symbol: notificationForm.symbol.trim().toUpperCase(),
-            indicatorId: notificationForm.indicatorId,
-            condition: parsedCondition,
-            channels: {
-              inApp: notificationForm.channelsInApp,
-              push: notificationForm.channelsPush,
-            },
-            cooldownSeconds: Math.floor(parsedCooldown),
-            enabled: notificationForm.enabled,
-          }),
+        const created = await persistence.createNotificationRule({
+          name: notificationForm.name.trim(),
+          dashboardId: notificationForm.dashboardId,
+          symbol: notificationForm.symbol.trim().toUpperCase(),
+          indicatorId: notificationForm.indicatorId,
+          condition: parsedCondition,
+          channels: {
+            inApp: notificationForm.channelsInApp,
+            push: notificationForm.channelsPush,
+          },
+          cooldownSeconds: Math.floor(parsedCooldown),
+          enabled: notificationForm.enabled,
         });
 
-        if (response.item) {
-          setNotificationRules((prev) => [...prev, response.item as NotificationRule]);
-          setNotificationForm(toNotificationFormState(response.item, dashboards));
+        if (created) {
+          setNotificationRules((prev) => [...prev, created]);
+          setNotificationForm(toNotificationFormState(created, dashboards));
         }
       }
     } catch (error) {
@@ -1095,7 +1016,8 @@ export default function Page() {
                 <button
                   type="button"
                   onClick={onOpenEditDashboard}
-                  className="rounded-xl border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-semibold text-slate-200 transition-colors hover:border-slate-500"
+                  disabled={!selectedDashboardId}
+                  className="rounded-xl border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-semibold text-slate-200 transition-colors hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Edit
                 </button>
@@ -1117,6 +1039,10 @@ export default function Page() {
                 </button>
               </div>
 
+              {dashboards.length > 0 && activeDashboard?.description ? (
+                <p className="mt-2 text-sm leading-5 text-slate-400">{activeDashboard.description}</p>
+              ) : null}
+
               <div className="mt-3 rounded-2xl border border-slate-700/80 bg-slate-950/45 px-4 py-3">
                 <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Active Indicator</p>
                 <p className="mt-1 text-base font-semibold text-slate-100">{activeIndicator?.name ?? 'Unavailable'}</p>
@@ -1124,27 +1050,43 @@ export default function Page() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/90 bg-slate-950/45 px-4 py-3 text-sm text-slate-300">
-              <div className="flex items-center justify-between gap-8">
-                <span className="text-cyan-100/90">Stream</span>
-                <span
-                  className={[
-                    'font-semibold',
-                    connected
-                      ? 'text-emerald-300'
-                      : connectionState === 'reconnecting'
-                        ? 'text-amber-300'
-                        : 'text-cyan-200',
-                  ].join(' ')}
-                >
-                  {streamLabel}
-                </span>
+              <div className="rounded-2xl border border-slate-700/90 bg-slate-950/45 px-4 py-3 text-sm text-slate-300">
+                <div className="flex items-center justify-between gap-8">
+                  <span className="text-cyan-100/90">Stream</span>
+                  <span
+                    className={[
+                      'inline-flex items-center gap-1.5 font-semibold',
+                      connected
+                        ? 'text-emerald-300'
+                        : connectionState === 'reconnecting'
+                          ? 'text-amber-300'
+                          : 'text-cyan-200',
+                    ].join(' ')}
+                  >
+                    {connected ? (
+                      <span
+                        className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.85)]"
+                        aria-hidden="true"
+                      />
+                    ) : connectionState === 'reconnecting' ? (
+                      <span
+                        className="h-2 w-2 animate-pulse rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.85)]"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <span
+                        className="h-3 w-3 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400"
+                        aria-hidden="true"
+                      />
+                    )}
+                    {streamLabel}
+                  </span>
+                </div>
+                <div className={['mt-2 text-xs', error ? 'text-rose-300' : 'text-cyan-200/80'].join(' ')}>
+                  {error ?? 'Awaiting dashboard packets'}
+                </div>
+                {configError ? <div className="mt-1 text-xs text-rose-400">{configError}</div> : null}
               </div>
-              <div className={['mt-2 text-xs', error ? 'text-rose-300' : 'text-cyan-200/80'].join(' ')}>
-                {error ?? 'Awaiting dashboard packets'}
-              </div>
-              {configError ? <div className="mt-1 text-xs text-rose-400">{configError}</div> : null}
-            </div>
           </div>
         </header>
 
@@ -1206,7 +1148,7 @@ export default function Page() {
           />
           <AnalysisChart
             symbol={selectedSymbol}
-            companyName={selectedRow?.company_name ?? ''}
+            companyName={selectedCompanyName}
             timerange={timerange}
             onChangeTimerange={setTimerange}
             historicalData={filteredHistory}
@@ -1253,7 +1195,7 @@ export default function Page() {
               <label className="grid gap-1 text-sm text-slate-300">
                 Symbols
                 <div className="relative rounded-lg border border-slate-700 bg-slate-950/55 p-3">
-                  {(symbolCatalogLoading || isBackgroundFetching) && (
+                  {(symbolCatalogLoading && symbolCatalog.length === 0) && (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/50 backdrop-blur-[1px]">
                       <div className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-500/30 border-t-cyan-500" />
                     </div>

@@ -1,16 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 
 import type { SymbolCatalogItem } from '@/lib/types';
-import { getSessionContext } from '@/lib/server/session';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-const DEFAULT_SYMBOL_CATALOG: SymbolCatalogItem[] = [
-  { symbol: 'FPT', companyName: 'FPT Corporation', exchange: 'HOSE' },
-  { symbol: 'HPG', companyName: 'Hoa Phat Group', exchange: 'HOSE' },
-  { symbol: 'VCB', companyName: 'Joint Stock Commercial Bank for Foreign Trade of Vietnam', exchange: 'HOSE' },
-];
+const DEFAULT_SYMBOL_CATALOG: SymbolCatalogItem[] = [];
 
 const VNSTOCK_SYMBOLS_TIMEOUT_MS = Number.parseInt(process.env.VNSTOCK_SYMBOLS_TIMEOUT_MS ?? '45000', 10);
 const SYMBOLS_CACHE_TTL_SECONDS = Number.parseInt(process.env.SYMBOLS_CACHE_TTL_SECONDS ?? '3600', 10);
@@ -291,12 +287,7 @@ async function fetchProviderCatalog(): Promise<SymbolCatalogItem[]> {
   }
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSessionContext(request);
-  if (!session) {
-    return NextResponse.json({ ok: false, message: 'Unauthorized' }, { status: 401 });
-  }
-
+export async function GET() {
   const providerItems = await fetchProviderCatalog();
   if (providerItems.length > 0) {
     return NextResponse.json({

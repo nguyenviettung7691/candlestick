@@ -161,8 +161,8 @@ export default function AnalysisChart({
             <span className="shrink-0 text-2xl font-extrabold tracking-[0.05em] text-slate-100">
               {hasSelectedSymbol ? symbol : 'No symbol selected'}
             </span>
-            <span className="max-w-[180px] truncate text-xs font-medium uppercase tracking-[0.16em] text-slate-500 sm:max-w-[280px]">
-              {hasSelectedSymbol ? companyName : 'Select a watchlist row to load chart'}
+            <span className="max-w-[200px] truncate text-xs font-medium uppercase tracking-[0.16em] text-slate-500 sm:max-w-[300px]">
+              {hasSelectedSymbol ? companyName : ''}
             </span>
           </p>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs tracking-[0.04em]">
@@ -176,7 +176,7 @@ export default function AnalysisChart({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="min-w-[176px] rounded-full border border-slate-700 bg-slate-950/45 p-1">
+          <div className="rounded-full border border-slate-700 bg-slate-950/45 p-1">
             {TIMERANGE_OPTIONS.map((option) => (
               <button
                 key={option}

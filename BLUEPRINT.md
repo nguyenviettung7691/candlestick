@@ -2,7 +2,7 @@
 
 ## 1. Product Goal
 
-Build a fully serverless, scale-to-zero market analytics web application where users can:
+Build a browser-only market analytics web application where users can:
 
 - Manage multiple dashboards.
 - Assign one active indicator per dashboard.
@@ -10,7 +10,28 @@ Build a fully serverless, scale-to-zero market analytics web application where u
 - Receive realtime updates after initial hydration.
 - Configure notifications tied to symbol plus indicator conditions.
 
-The architecture remains hydrate-then-stream using AWS services and browser-native realtime capabilities.
+The architecture is hydrate-then-stream with no cloud backend: a local Python WebSocket stream (`frontend/scripts/local_ws_stream.py`) backed by `vnstock` feeds the Next.js UI, and all user data is persisted in the browser via IndexedDB.
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI[Next.js UI]
+    IDB[(IndexedDB)]
+    EVAL[Notification Evaluator]
+  end
+  subgraph LocalProcess
+    WS[local_ws_stream.py]
+    VN[vnstock]
+  end
+  UI -- WebSocket --> WS
+  WS -- market data --> VN
+  VN -- candles/indicators --> WS
+  WS -- StreamPacket --> UI
+  UI -- read/write config --> IDB
+  UI -- per-packet rules --> EVAL
+  EVAL -- fired events --> IDB
+  EVAL -- in-app feed --> UI
+```
 
 ## 2. Scope Summary
 
@@ -26,9 +47,9 @@ The architecture remains hydrate-then-stream using AWS services and browser-nati
   - Stocks table list.
   - Symbol detail chart with indicator overlays.
 - Initial market data hydration on first load.
-- Realtime refresh using WebSocket streaming.
-- Browser push notifications and in-app alerts for user-defined conditions.
-- Persistence of user configuration and authentication/session data in AWS data services.
+- Realtime refresh using a local WebSocket stream.
+- Browser push notifications (optional) and in-app alerts for user-defined conditions.
+- Persistence of user configuration and notification history in browser IndexedDB (no server, no cloud account).
 
 ### 2.2 Out Of Scope (v1)
 
@@ -152,38 +173,37 @@ Minimum modules:
 
 ### 5.1 Storage Principles
 
-- Use AWS managed services for persistence.
-- Keep single-table DynamoDB design for core entities where appropriate.
-- Maintain clear user ownership boundaries for all mutable records.
+- Persist all user data in the browser via IndexedDB (no server, no cloud account).
+- Keep one object store per entity type: `dashboards`, `indicators`, `notificationRules`, `notificationEvents`, `pushSubscriptions`.
+- Maintain a stable local user id (UUID in `localStorage`) to scope client state.
 
 ### 5.2 Core Entity Types
 
-- User Profile
-- Auth Session or Token Record
+- Local User (stable id in localStorage)
 - Dashboard
-- Dashboard Symbol Mapping
+- Dashboard Symbol Mapping (embedded in dashboard)
 - Indicator Definition
-- Indicator Version or Config Snapshot
 - Notification Rule
-- WebSocket Connection
+- Notification Event (history)
+- Push Subscription (optional, stored but delivery requires a push server)
 
 ### 5.3 Required Relationships
 
-- One user -> many dashboards.
+- One local user -> many dashboards.
 - One dashboard -> one active indicator.
 - One dashboard -> many symbols.
-- One user -> many indicators (custom or duplicated variants).
-- One user -> many notification rules.
+- One local user -> many indicators (custom or duplicated variants).
+- One local user -> many notification rules.
+- One notification rule -> many notification events (history in IndexedDB).
 
-### 5.4 WebSocket Connection Records
+### 5.4 Realtime Connection
 
-Connection lifecycle records remain ephemeral.
+The browser opens a WebSocket directly to the local stream (`ws://localhost:8788`). There are no server-side connection records; the stream is a single long-lived Python process.
 
 Rules:
 
-- Keep connection rows keyed by PK=WS_CONNECTION#{id} and dashboard-scoped SK.
-- Connection TTL is relative: connected_at + WS_CONNECTION_TTL_SECONDS.
-- Persistent records (dashboards, indicators, notification rules) do not use TTL unless explicitly intended.
+- The UI reconnects automatically with a connection-state model (connecting, connected, reconnecting).
+- Dashboard scoping is enforced client-side by ignoring packets whose `dashboard_id` differs from the selected dashboard.
 
 ## 6. Realtime Data Contract
 
@@ -191,14 +211,15 @@ Rules:
 
 On first dashboard load:
 
-- Fetch latest available market and indicator snapshot for active dashboard.
-- Render table and initial selected-symbol chart from hydrated state.
+- Read dashboards, indicators, and notification rules from IndexedDB.
+- Connect to the local WebSocket stream and render the initial selected-symbol chart from the first validated packet.
+- Render table and chart from hydrated client state.
 
 After hydration:
 
-- Subscribe to realtime updates over WebSocket.
+- Subscribe to realtime updates over the local WebSocket.
 - Apply validated packets to state.
-- Keep updates scoped to active dashboard context.
+- Keep updates scoped to the active dashboard context (ignore other `dashboard_id` values).
 
 ### 6.2 Stream Packet Requirements
 
@@ -213,7 +234,8 @@ Client rules:
 
 - Validate payload shape before applying updates.
 - Ignore packets for other dashboards.
-- Preserve stable indicator signal vocabulary across backend and frontend.
+- Preserve stable indicator signal vocabulary across the local stream and frontend.
+- Notification rules are evaluated client-side (see `src/lib/client/notifications.ts`); the stream does not push `notifications`.
 
 ## 7. Notification System Requirements
 
@@ -230,43 +252,45 @@ Users can configure alert rules with at least:
 
 ### 7.2 Delivery Channels
 
-v1 requires both:
+v1 supports:
 
-- Browser push notifications (service worker based).
-- In-app alert notifications while dashboard is open.
+- In-app alert notifications while dashboard is open (always available).
+- Optional browser push notifications (service worker based); push subscriptions are stored in IndexedDB but delivery requires a push server, which is out of scope for the local-only setup.
 
 Behavior:
 
-- Request browser permission explicitly.
-- Do not send duplicate notifications during cooldown.
-- Persist notification preferences and rules per user.
+- Request browser permission explicitly (only when push is enabled).
+- Do not send duplicate notifications during cooldown (enforced client-side via `lastTriggeredAtEpoch`).
+- Persist notification rules and fired events in IndexedDB.
 
 ## 8. Auth And Security Baseline
 
 Authentication model for this blueprint:
 
-- Custom token and session model persisted in AWS DB services.
+- No server-side auth. A stable local user id (UUID) is generated and stored in `localStorage` (see `src/lib/client/user.ts`).
+- All data is scoped to the browser that created it; there is no cross-device or multi-user sharing.
 
 Requirements:
 
-- Every mutable entity operation is authorized and user-scoped.
-- Dashboard, indicator, and notification access must enforce ownership.
-- Session lifecycle must include expiry and revocation behavior.
+- Every mutable entity operation is user-scoped to the local browser.
+- Dashboard, indicator, and notification access are isolated per browser profile.
+- No session expiry or revocation is needed because there is no server session.
 
 ## 9. Non-Functional Requirements
 
-- Scale-to-zero backend behavior with no always-on compute required.
+- Fully browser-local: no always-on server, no cloud account, no external network calls except the optional `vnstock` market data fetch from the local stream.
 - Mobile-safe and desktop-safe responsiveness for table and chart areas.
-- Observability for polling, websocket delivery, and notification events.
-- Resilience for pagination in DynamoDB scans and queries used in loops and cleanup paths.
+- Observability via in-app notification feed and browser DevTools (IndexedDB, console).
 - Backward-compatible contracts for indicator result shape and websocket payload fields.
+- Simple local run: `npm run dev:local` starts both the Next.js app and the Python stream.
 
 ## 10. Implementation Notes
 
 - Keep frontend type definitions as source of truth for stream payload contracts.
 - Keep indicator output contract unchanged for compatibility.
-- Preserve dashboard-scoped routing for websocket connection handling.
-- Prefer parameterized environment controls for runtime tuning over hard-coded constants.
+- Preserve dashboard-scoped routing client-side by ignoring packets for other dashboards.
+- Prefer parameterized environment controls for runtime tuning over hard-coded constants (see `frontend/scripts/local_ws_stream.py`).
+- Notification evaluation lives entirely in the browser (`src/lib/client/notifications.ts` + `src/hooks/useNotificationEvaluator.ts`).
 
 ## 11. Acceptance Criteria Checklist
 
@@ -278,9 +302,9 @@ A release candidate satisfies this blueprint only if:
 - User can manage indicator configurations in dedicated indicator screen.
 - Table section supports symbol add/remove and quick-glance indicator outputs.
 - Selecting symbol updates detail chart with full company name and timerange controls.
-- App hydrates first load data, then updates via websocket stream.
-- Notification rules can be configured and delivered via browser push and in-app alerts.
-- User configuration and auth session records persist in AWS data services.
+- App hydrates first load data from IndexedDB, then updates via the local websocket stream.
+- Notification rules can be configured and evaluated client-side, with in-app alerts (and optional push) when conditions fire.
+- User configuration and notification history persist in browser IndexedDB across reloads.
 
 ## 12. References
 
@@ -288,5 +312,4 @@ A release candidate satisfies this blueprint only if:
 2. TanStack Table v8: https://tanstack.com/table/v8
 3. vnstock: https://github.com/thinh-vu/vnstock
 4. Next.js App Router: https://nextjs.org/docs/app
-5. AWS SAM Developer Guide: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html
-6. Amazon API Gateway WebSocket APIs: https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html
+5. idb (IndexedDB promise wrapper): https://github.com/jakearchibald/idb

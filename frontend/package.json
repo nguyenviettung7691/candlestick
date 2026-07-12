@@ -4,18 +4,16 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
-    "mock:ws": "node ./scripts/mock-websocket-stream.mjs",
-    "mock:ws:real": "python ../backend/lambda_polling/local_ws_stream.py",
-    "dev:local": "concurrently -k -n MOCK,NEXT \"npm:mock:ws\" \"npm:dev\"",
-    "dev:local:real": "concurrently -k -n REAL,NEXT \"npm:mock:ws:real\" \"cross-env NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8788 npm run dev\"",
+    "mock:ws": "python ./scripts/local_ws_stream.py",
+    "mock:ws:install": "pip install -r ./scripts/requirements-dev.txt",
+    "dev:local": "concurrently -k -n REAL,NEXT \"npm:mock:ws\" \"cross-env NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8788 npm run dev\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.894.0",
-    "@aws-sdk/lib-dynamodb": "^3.894.0",
     "@tanstack/react-table": "^8.20.5",
+    "idb": "^8.0.0",
     "lightweight-charts": "^4.2.0",
     "next": "14.2.5",
     "react": "18.3.1",

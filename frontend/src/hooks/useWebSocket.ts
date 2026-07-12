@@ -7,6 +7,7 @@ import type { DashboardTickerSnapshot, NotificationEvent, StreamHistoryBar, Stre
 interface UseWebSocketOptions {
   url: string;
   dashboardId: string;
+  symbols?: string[];
 }
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting';
@@ -121,7 +122,7 @@ function isStreamPacket(value: unknown): value is StreamPacket {
   return packet.notifications.every(isNotificationEvent);
 }
 
-export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
+export function useWebSocket({ url, dashboardId, symbols = [] }: UseWebSocketOptions) {
   const [connected, setConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [lastPacket, setLastPacket] = useState<StreamPacket | null>(null);
@@ -130,10 +131,17 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
   const retryRef = useRef<number | null>(null);
   const connectTimerRef = useRef<number | null>(null);
   const attemptRef = useRef(0);
+  // Interval reference for keep‑alive pings
+  const pingIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
     let shouldReconnect = true;
+
+    if (!dashboardId) {
+      setConnected(false);
+      return;
+    }
 
     const clearRetry = () => {
       if (retryRef.current !== null) {
@@ -146,6 +154,13 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
       if (connectTimerRef.current !== null) {
         window.clearTimeout(connectTimerRef.current);
         connectTimerRef.current = null;
+      }
+    };
+    // Clear keep‑alive ping interval
+    const clearPingInterval = () => {
+      if (pingIntervalRef.current !== null) {
+        window.clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
       }
     };
 
@@ -167,6 +182,8 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
       }
 
       clearRetry();
+      clearPingInterval();
+      console.debug('[useWebSocket] initiating connection attempt', { attempt: attemptRef.current });
       setConnectionState(attemptRef.current === 0 ? 'connecting' : 'reconnecting');
 
       let socketUrl: URL;
@@ -182,7 +199,18 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
 
       const socket = new WebSocket(socketUrl.toString());
       socketRef.current = socket;
-
+      // Start keep‑alive ping interval (30 s) to prevent idle timeout
+      pingIntervalRef.current = window.setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          try {
++            console.debug('[useWebSocket] sending keep‑alive ping');
+            socket.send(JSON.stringify({ type: 'ping' }));
+          } catch {
+            // ignore errors; reconnection logic will handle
+          }
+        }
+      }, 30000);
+    
       socket.onopen = () => {
         if (!mounted) {
           return;
@@ -191,41 +219,56 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
         setConnected(true);
         setConnectionState('connected');
         setError(null);
-      };
-
-      socket.onmessage = (event) => {
-        if (!mounted) {
-          return;
-        }
-        try {
-          const parsed = JSON.parse(event.data) as unknown;
-          if (!isStreamPacket(parsed)) {
-            setError('Received an invalid stream payload.');
-            return;
-          }
-          if (parsed.dashboard_id !== dashboardId) {
-            return;
-          }
-          setLastPacket(parsed);
-          setError(null);
-        } catch {
-          setError('Received an invalid stream payload.');
+        // When socket (re)connects, send the current dashboard symbols once.
+        if (symbols && symbols.length) {
+          socket.send(JSON.stringify({ type: 'subscribe', symbols }));
         }
       };
 
-      socket.onerror = () => {
-        if (mounted) {
-          setError('WebSocket error while streaming dashboard data.');
-        }
-      };
+            socket.onmessage = (event) => {
+              if (!mounted) {
+                return;
+              }
+              try {
+                const parsed = JSON.parse(event.data) as unknown;
+                if (!isStreamPacket(parsed)) {
+                  setError('Received an invalid stream payload.');
+                  return;
+                }
+                if (parsed.dashboard_id !== dashboardId) {
+                  return;
+                }
+                setLastPacket(parsed);
+                setError(null);
+              } catch {
+                setError('Received an invalid stream payload.');
+              }
+            };
 
-      socket.onclose = () => {
-        if (!mounted || socket !== socketRef.current) {
-          return;
-        }
-        scheduleReconnect();
-      };
-    };
+            socket.onerror = () => {
+              if (mounted) {
+                setError('WebSocket error while streaming dashboard data.');
+              }
+            };
+
+            socket.onclose = (event: CloseEvent) => {
+              if (!mounted || socket !== socketRef.current) {
+                return;
+              }
+              // Only reconnect on abnormal closures. A normal closure (code 1000)
+              // means the server intentionally ended the connection; treat it as
+              // final so we don't spin up a brand‑new socket when nothing changed.
+              if (event.code === 1000) {
+                console.info('[useWebSocket] normal closure (1000); not reconnecting');
+                setConnected(false);
+                setConnectionState('connecting');
+                return;
+              }
+              console.warn('[useWebSocket] abnormal socket close; clearing ping and scheduling reconnect', event.code, event.reason);
+              clearPingInterval();
+              scheduleReconnect();
+            };
+          };
 
     // Defer the initial connect to avoid creating a transient socket during
     // React Strict Mode's dev-only mount/unmount cycle.
@@ -239,10 +282,28 @@ export function useWebSocket({ url, dashboardId }: UseWebSocketOptions) {
       shouldReconnect = false;
       clearRetry();
       clearConnectTimer();
+      clearPingInterval();
       socketRef.current?.close();
       socketRef.current = null;
     };
   }, [dashboardId, url]);
+
+  // Re-subscribe whenever the dashboard's symbol list changes (or the
+  // connection (re)opens). The main connection effect only runs on
+  // dashboardId/url changes, so without this the server would keep streaming
+  // the stale symbol set after an edit.
+  useEffect(() => {
+    const socket = socketRef.current;
+    const isOpen = !!socket && socket.readyState === WebSocket.OPEN;
+    if (isOpen && symbols && symbols.length) {
+      try {
+        socket.send(JSON.stringify({ type: 'subscribe', symbols }));
+      } catch (err) {
+        console.error('Failed to send subscribe on symbols change', err);
+        setError('WebSocket send error while updating symbols subscription.');
+      }
+    }
+  }, [symbols, connected]);
 
   return { connected, connectionState, lastPacket, error };
 }
