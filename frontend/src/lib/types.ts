@@ -62,7 +62,7 @@ export interface IndicatorMarker {
   text: string;
 }
 
-export type TimerangeOption = '1D' | '1W' | '1M' | '3M';
+export type TimerangeOption = '1D' | '1W' | '1M';
 
 export interface DashboardDefinition {
   id: string;

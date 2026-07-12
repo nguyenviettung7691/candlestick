@@ -68,14 +68,12 @@ class _VnstockRateLimiter:
         per_day: int,
         per_month: int,
         time_func=time.monotonic,
-        sleep_func=time.sleep,
     ) -> None:
         self._per_minute = max(int(per_minute), 1)
         self._per_hour = max(int(per_hour), 1)
         self._per_day = max(int(per_day), 1)
         self._per_month = max(int(per_month), 1)
         self._time = time_func
-        self._sleep = sleep_func
         self._minute_window = 60.0
         self._hour_window = 3600.0
         self._day_window = 86_400.0
@@ -97,7 +95,7 @@ class _VnstockRateLimiter:
         while self._month_timestamps and now - self._month_timestamps[0] >= self._month_window:
             self._month_timestamps.popleft()
 
-    def acquire(self) -> None:
+    async def acquire(self) -> None:
         while True:
             with self._lock:
                 now = self._time()
@@ -133,7 +131,7 @@ class _VnstockRateLimiter:
                 self._per_month,
                 sleep_for,
             )
-            self._sleep(sleep_for)
+            await asyncio.sleep(sleep_for)
 
 
 VNSTOCK_RATE_LIMITER = _VnstockRateLimiter(
@@ -226,7 +224,6 @@ def _call_market_ohlcv_method(ohlcv_method: Any, *, ticker: str) -> pd.DataFrame
     last_exc: Exception | None = None
     for kwargs in attempts:
         try:
-            VNSTOCK_RATE_LIMITER.acquire()
             frame = ohlcv_method(**kwargs)
             if frame is None:
                 return frame
@@ -271,7 +268,6 @@ def _call_quote_history_method(history_method: Any, *, ticker: str) -> pd.DataFr
     last_exc: Exception | None = None
     for kwargs in attempts:
         try:
-            VNSTOCK_RATE_LIMITER.acquire()
             frame = history_method(**kwargs)
             if frame is None:
                 return frame
@@ -309,7 +305,6 @@ def _call_legacy_history_method(history_method: Any, *, ticker: str) -> pd.DataF
     last_exc: Exception | None = None
     for kwargs in attempts:
         try:
-            VNSTOCK_RATE_LIMITER.acquire()
             frame = history_method(**kwargs)
             if frame is None:
                 return frame
@@ -618,7 +613,17 @@ async def _stream_client(websocket: WebSocketServerProtocol, dashboard_symbols: 
             if symbols:
                 if stock_engine is None:
                     stock_engine = _create_stock_engine()
-                live_data, history_by_symbol = _fetch_live_data_with_history(symbols, stock_engine)
+                # Rate limiting must run on the main event loop (not inside the
+                # worker thread started by asyncio.to_thread below), otherwise
+                # `await asyncio.sleep` would raise "no running event loop".
+                for _symbol in symbols:
+                    await VNSTOCK_RATE_LIMITER.acquire()
+                # Offload the blocking vnstock HTTP calls to a worker thread so
+                # the asyncio event loop stays free to service ping/pong
+                # keep-alives and avoid abnormal socket closures.
+                live_data, history_by_symbol = await asyncio.to_thread(
+                    _fetch_live_data_with_history, symbols, stock_engine
+                )
                 scoped_data = {symbol: live_data[symbol] for symbol in symbols if symbol in live_data}
                 scoped_history = {symbol: history_by_symbol[symbol] for symbol in symbols if symbol in history_by_symbol}
             else:
@@ -660,7 +665,13 @@ async def _main() -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _request_shutdown)
 
-    async with serve(lambda ws: _stream_client(ws, dashboard_symbols), HOST, PORT):
+    async with serve(
+        lambda ws: _stream_client(ws, dashboard_symbols),
+        HOST,
+        PORT,
+        ping_interval=30,
+        ping_timeout=30,
+    ):
         LOGGER.info("local vnstock websocket running on ws://%s:%s", HOST, PORT)
         LOGGER.info("interval=%ss dashboards=%s", INTERVAL_SECONDS, ",".join(sorted(dashboard_symbols.keys())))
         await stop_event.wait()

@@ -229,6 +229,18 @@ export function useWebSocket({ url, dashboardId, symbols = [] }: UseWebSocketOpt
               if (!mounted) {
                 return;
               }
+              // Reply to server keep‑alive pings with a pong so the connection
+              // is not closed abnormally. This runs before the StreamPacket
+              // validation path so ping/pong never trips the error state.
+              try {
+                const raw = JSON.parse(event.data) as { type?: string } | null;
+                if (raw && raw.type === 'ping') {
+                  socket.send(JSON.stringify({ type: 'pong' }));
+                  return;
+                }
+              } catch {
+                // fall through to normal packet handling below
+              }
               try {
                 const parsed = JSON.parse(event.data) as unknown;
                 if (!isStreamPacket(parsed)) {

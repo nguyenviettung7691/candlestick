@@ -59,7 +59,6 @@ const TIMERANGE_TO_BARS: Record<TimerangeOption, number> = {
   '1D': 24,
   '1W': 60,
   '1M': 120,
-  '3M': 180,
 };
 
 interface DashboardFormState {

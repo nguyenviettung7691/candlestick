@@ -14,7 +14,7 @@ interface ChartProps {
   indicatorMarkers: IndicatorMarker[];
 }
 
-const TIMERANGE_OPTIONS: TimerangeOption[] = ['1D', '1W', '1M', '3M'];
+const TIMERANGE_OPTIONS: TimerangeOption[] = ['1D', '1W', '1M'];
 
 export default function AnalysisChart({
   symbol,
