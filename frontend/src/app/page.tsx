@@ -395,6 +395,10 @@ export default function Page() {
   const [indicatorEditor, setIndicatorEditor] = useState<IndicatorEditorState>(
     toIndicatorEditorState(BUILT_IN_INDICATORS[0]),
   );
+  // Tracks whether the currently-edited indicator is an unsaved draft created
+  // via "New Custom" (id prefix `custom_draft_`). This distinguishes a brand
+  // new custom indicator from an already-persisted one during save.
+  const [isIndicatorDraft, setIsIndicatorDraft] = useState(false);
   const [notificationRules, setNotificationRules] = useState<NotificationRule[]>([]);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [notificationForm, setNotificationForm] = useState<NotificationFormState>(
@@ -480,6 +484,23 @@ export default function Page() {
 
   const hydrateConfiguration = useCallback(async () => {
     setConfigError(null);
+
+    // Load custom indicators in isolation so a failure in another store does
+    // not discard them. Only fall back to built-in defaults when the
+    // indicators store itself fails.
+    let customIndicators: IndicatorDefinition[] = [];
+    let indicatorsFailed = false;
+    try {
+      customIndicators = await persistence.listCustomIndicators();
+    } catch (error) {
+      indicatorsFailed = true;
+      setConfigError(error instanceof Error ? error.message : 'Failed to load custom indicators.');
+    }
+    // Apply custom indicators immediately so a later failure in another store
+    // cannot discard them. Falls back to built-ins only when the indicators
+    // store itself failed to load.
+    setIndicators([...BUILT_IN_INDICATORS, ...customIndicators]);
+
     try {
       const cachedCatalog = getSymbolCatalog();
       const hasCache = !!(cachedCatalog && cachedCatalog.length > 0);
@@ -489,9 +510,8 @@ export default function Page() {
 
       const symbolResponsePromise = refreshSymbolCatalog();
 
-      const [apiDashboards, customIndicators, notificationItems, symbolResponse] = await Promise.all([
+      const [apiDashboards, notificationItems, symbolResponse] = await Promise.all([
         persistence.listDashboards(),
-        persistence.listCustomIndicators(),
         persistence.listNotificationRules(),
         symbolResponsePromise,
       ]);
@@ -518,8 +538,13 @@ export default function Page() {
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : 'Failed to load dashboard configuration.');
       setSymbolCatalog([]);
-      setIndicators(BUILT_IN_INDICATORS);
+      setDashboards([]);
       setNotificationRules([]);
+      // Only discard custom indicators (fall back to built-ins) when the
+      // indicators store itself failed to load.
+      if (indicatorsFailed) {
+        setIndicators(BUILT_IN_INDICATORS);
+      }
     }
   }, [refreshSymbolCatalog]);
 
@@ -804,6 +829,8 @@ export default function Page() {
     setIsPersisting(true);
     setConfigError(null);
     try {
+      // Case 1: Built-in indicator — always create a brand new custom copy so
+      // the original built-in definition is never mutated.
       if (base.isBuiltIn) {
         const created = await persistence.createIndicator({
           name: indicatorEditor.name.trim(),
@@ -811,23 +838,55 @@ export default function Page() {
           params: parsedParams,
         });
 
-        if (created) {
-          setIndicators((prev) => [...prev, created]);
-          setActiveIndicatorEditorId(created.id);
-          setIndicatorEditor(toIndicatorEditorState(created));
+        if (!created) {
+          setConfigError('Failed to create the custom indicator. Please try again.');
+          return;
         }
+
+        setIndicators((prev) => [...prev, created]);
+        setActiveIndicatorEditorId(created.id);
+        setIndicatorEditor(toIndicatorEditorState(created));
         return;
       }
 
+      // Case 2: Unsaved draft created via "New Custom" — persist it as a real
+      // custom indicator and swap the temporary draft entry for the saved one.
+      if (isIndicatorDraft) {
+        const created = await persistence.createIndicator({
+          name: indicatorEditor.name.trim(),
+          description: indicatorEditor.description.trim(),
+          params: parsedParams,
+        });
+
+        if (!created) {
+          setConfigError('Failed to create the custom indicator. Please try again.');
+          return;
+        }
+
+        // Replace the draft entry (matched by its temporary id) with the
+        // persisted record, then point the editor at the new real id.
+        setIndicators((prev) =>
+          prev.map((indicator) => (indicator.id === activeIndicatorEditorId ? created : indicator)),
+        );
+        setActiveIndicatorEditorId(created.id);
+        setIndicatorEditor(toIndicatorEditorState(created));
+        setIsIndicatorDraft(false);
+        return;
+      }
+
+      // Case 3: Existing custom indicator — update the persisted record in place.
       const updated = await persistence.updateIndicator(base.id, {
         name: indicatorEditor.name.trim(),
         description: indicatorEditor.description.trim(),
         params: parsedParams,
       });
 
-      if (updated) {
-        setIndicators((prev) => prev.map((indicator) => (indicator.id === updated.id ? updated : indicator)));
+      if (!updated) {
+        setConfigError('Failed to update the indicator. It may have been deleted. Please refresh.');
+        return;
       }
+
+      setIndicators((prev) => prev.map((indicator) => (indicator.id === updated.id ? updated : indicator)));
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : 'Failed to persist indicator changes.');
     } finally {
@@ -852,6 +911,7 @@ export default function Page() {
     setIndicators((prev) => [...prev, customDraft]);
     setActiveIndicatorEditorId(customDraft.id);
     setIndicatorEditor(toIndicatorEditorState(customDraft));
+    setIsIndicatorDraft(true);
   };
 
   const onAssignIndicatorToDashboard = async () => {
@@ -873,6 +933,77 @@ export default function Page() {
       }
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : 'Failed to assign indicator to dashboard.');
+    } finally {
+      setIsPersisting(false);
+    }
+  };
+
+  const onDeleteIndicator = async (indicatorId: string) => {
+    const target = indicators.find((indicator) => indicator.id === indicatorId);
+    if (!target || target.isBuiltIn) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Are you sure you want to delete the indicator "${target.name}"? This will also reset it on any dashboards or notification rules that reference it.`,
+      )
+    ) {
+      return;
+    }
+
+    setIsPersisting(true);
+    setConfigError(null);
+    try {
+      await persistence.deleteIndicator(indicatorId);
+
+      // Remove the indicator from the available list.
+      setIndicators((prev) => prev.filter((indicator) => indicator.id !== indicatorId));
+
+      // Reference cleanup: reset any dashboard or notification rule that referenced
+      // the deleted indicator so the UI degrades gracefully to a built-in default.
+      const fallbackIndicatorId = BUILT_IN_INDICATORS[0].id;
+
+      const affectedDashboards = dashboards.filter((dashboard) => dashboard.indicatorId === indicatorId);
+      if (affectedDashboards.length > 0) {
+        await Promise.all(
+          affectedDashboards.map((dashboard) =>
+            persistence.updateDashboard(dashboard.id, { indicatorId: fallbackIndicatorId }),
+          ),
+        );
+        setDashboards((prev) =>
+          prev.map((dashboard) =>
+            dashboard.indicatorId === indicatorId
+              ? { ...dashboard, indicatorId: fallbackIndicatorId }
+              : dashboard,
+          ),
+        );
+      }
+
+      const affectedRules = notificationRules.filter((rule) => rule.indicatorId === indicatorId);
+      if (affectedRules.length > 0) {
+        await Promise.all(
+          affectedRules.map((rule) =>
+            persistence.updateNotificationRule(rule.id, { indicatorId: fallbackIndicatorId }),
+          ),
+        );
+        setNotificationRules((prev) =>
+          prev.map((rule) =>
+            rule.indicatorId === indicatorId ? { ...rule, indicatorId: fallbackIndicatorId } : rule,
+          ),
+        );
+      }
+
+      // If the deleted indicator was the one being edited, reselect another one.
+      if (activeIndicatorEditorId === indicatorId) {
+        const nextSeed = indicators.find((indicator) => indicator.id !== indicatorId) ?? BUILT_IN_INDICATORS[0];
+        setActiveIndicatorEditorId(nextSeed.id);
+        setIndicatorEditor(toIndicatorEditorState(nextSeed));
+        // The draft is gone, so clear the draft flag regardless of its prior value.
+        setIsIndicatorDraft(false);
+      }
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : 'Failed to delete indicator.');
     } finally {
       setIsPersisting(false);
     }
@@ -971,6 +1102,34 @@ export default function Page() {
       }
     } catch (error) {
       setNotificationError(error instanceof Error ? error.message : 'Failed to persist notification rule.');
+    } finally {
+      setIsPersisting(false);
+    }
+  };
+
+  const onDeleteNotificationRule = async (ruleId: string) => {
+    const target = notificationRules.find((rule) => rule.id === ruleId);
+    if (!target) {
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete the notification rule "${target.name}"?`)) {
+      return;
+    }
+
+    setIsPersisting(true);
+    setConfigError(null);
+    try {
+      await persistence.deleteNotificationRule(ruleId);
+      setNotificationRules((prev) => prev.filter((rule) => rule.id !== ruleId));
+
+      // If the deleted rule is the one currently being edited, clear the selection.
+      if (notificationForm.id === ruleId) {
+        const remaining = notificationRules.filter((rule) => rule.id !== ruleId);
+        setNotificationForm(toNotificationFormState(remaining[0] ?? null, dashboards));
+      }
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : 'Failed to delete notification rule.');
     } finally {
       setIsPersisting(false);
     }
@@ -1297,20 +1456,35 @@ export default function Page() {
                 </button>
                 <div className="grid gap-2">
                   {indicators.map((indicator) => (
-                    <button
+                    <div
                       key={indicator.id}
-                      type="button"
-                      onClick={() => onSelectIndicatorEditor(indicator.id)}
                       className={[
-                        'rounded-lg border px-3 py-2 text-left text-sm',
+                        'flex items-center gap-2 rounded-lg border px-3 py-2',
                         activeIndicatorEditorId === indicator.id
-                          ? 'border-cyan-400/55 bg-cyan-400/10 text-cyan-100'
-                          : 'border-slate-700 bg-slate-900/55 text-slate-300',
+                          ? 'border-cyan-400/55 bg-cyan-400/10'
+                          : 'border-slate-700 bg-slate-900/55',
                       ].join(' ')}
                     >
-                      <div className="font-semibold">{indicator.name}</div>
-                      <div className="mt-0.5 text-xs text-slate-400">{indicator.isBuiltIn ? 'Built-in' : 'Custom'}</div>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => onSelectIndicatorEditor(indicator.id)}
+                        className="flex-1 text-left text-sm"
+                      >
+                        <div className="font-semibold text-cyan-100">{indicator.name}</div>
+                        <div className="mt-0.5 text-xs text-slate-400">{indicator.isBuiltIn ? 'Built-in' : 'Custom'}</div>
+                      </button>
+                      {!indicator.isBuiltIn ? (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteIndicator(indicator.id)}
+                          disabled={isPersisting}
+                          className="rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/25"
+                          aria-label={`Delete ${indicator.name}`}
+                        >
+                          Delete
+                        </button>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
               </aside>
@@ -1538,6 +1712,16 @@ export default function Page() {
                 </div>
 
                 <div className="mt-5 flex flex-wrap justify-end gap-2">
+                  {notificationForm.id ? (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteNotificationRule(notificationForm.id!)}
+                      disabled={isPersisting}
+                      className="rounded-lg border border-rose-500/40 bg-rose-500/15 px-3 py-2 text-sm font-semibold text-rose-200 transition-colors hover:bg-rose-500/25"
+                    >
+                      Delete
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={onSaveNotificationRule}

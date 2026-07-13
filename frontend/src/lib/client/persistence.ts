@@ -141,6 +141,18 @@ export async function updateIndicator(
   return updated;
 }
 
+// Delete a custom indicator by its ID
+export async function deleteIndicator(indicatorId: string): Promise<void> {
+  await deleteFromStore(STORE_INDICATORS, indicatorId);
+}
+
+// Fetch a single custom indicator by its ID. Returns `undefined` when the
+// record does not exist in the `indicators` store.
+export async function getIndicatorById(id: string): Promise<IndicatorDefinition | undefined> {
+  const db = await getDb();
+  return db.get(STORE_INDICATORS, id);
+}
+
 // ---------------------------------------------------------------------------
 // Notification Rules
 // ---------------------------------------------------------------------------
@@ -216,6 +228,11 @@ export async function updateNotificationRule(
 
   await db.put(STORE_NOTIFICATION_RULES, updated);
   return updated;
+}
+
+// Delete a notification rule by its ID
+export async function deleteNotificationRule(ruleId: string): Promise<void> {
+  await deleteFromStore(STORE_NOTIFICATION_RULES, ruleId);
 }
 
 // ---------------------------------------------------------------------------
